@@ -2,12 +2,18 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 
 export async function middleware(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({ request })
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
+  // Guard: jika env variables belum tersedia, lanjut tanpa auth check
+  if (!supabaseUrl || !supabaseKey) {
+    return NextResponse.next({ request })
+  }
+
+  try {
+    let supabaseResponse = NextResponse.next({ request })
+
+    const supabase = createServerClient(supabaseUrl, supabaseKey, {
       cookies: {
         getAll() {
           return request.cookies.getAll()
@@ -22,27 +28,33 @@ export async function middleware(request: NextRequest) {
           )
         },
       },
+    })
+
+    // Refresh session if expired — IMPORTANT: do not remove this
+    const { data: { user } } = await supabase.auth.getUser()
+
+    const pathname = request.nextUrl.pathname
+
+    // Auth routes: redirect to dashboard if already logged in
+    const isAuthRoute = pathname.startsWith('/login') || pathname.startsWith('/register')
+    if (isAuthRoute && user) {
+      return NextResponse.redirect(new URL('/dashboard', request.url))
     }
-  )
 
-  // Refresh session if expired — IMPORTANT: do not remove this
-  const { data: { user } } = await supabase.auth.getUser()
+    // Protected routes: redirect to login if not authenticated
+    const isProtectedRoute =
+      pathname.startsWith('/dashboard') ||
+      pathname.startsWith('/tabungan') ||
+      pathname.startsWith('/riwayat')
+    if (isProtectedRoute && !user) {
+      return NextResponse.redirect(new URL('/login', request.url))
+    }
 
-  const pathname = request.nextUrl.pathname
-
-  // Auth routes: redirect to dashboard if already logged in
-  const isAuthRoute = pathname.startsWith('/login') || pathname.startsWith('/register')
-  if (isAuthRoute && user) {
-    return NextResponse.redirect(new URL('/dashboard', request.url))
+    return supabaseResponse
+  } catch {
+    // Jika middleware gagal, tetap lanjutkan request
+    return NextResponse.next({ request })
   }
-
-  // Protected routes: redirect to login if not authenticated
-  const isProtectedRoute = pathname.startsWith('/dashboard') || pathname.startsWith('/tabungan') || pathname.startsWith('/riwayat')
-  if (isProtectedRoute && !user) {
-    return NextResponse.redirect(new URL('/login', request.url))
-  }
-
-  return supabaseResponse
 }
 
 export const config = {
